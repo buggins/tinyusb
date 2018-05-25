@@ -52,7 +52,7 @@
 //--------------------------------------------------------------------+
 // Compile-time Assert (use VERIFY_STATIC to avoid name conflict)
 //--------------------------------------------------------------------+
-#if defined(__ICCARM__) || (__STDC_VERSION__ >= 201112L )
+#if (defined(__ICCARM__) || (__STDC_VERSION__ >= 201112L )) && (CFG_TUSB_MCU != OPT_MCU_XIL_ZYNQPS)
   #define VERIFY_STATIC   static_assert
 #else
   #if defined __COUNTER__ && __COUNTER__ != __COUNTER__

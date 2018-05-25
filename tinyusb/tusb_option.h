@@ -57,6 +57,7 @@
 #define OPT_MCU_LPC43XX        7 ///< NXP LPC43xx series
 
 #define OPT_MCU_NRF5X        100 ///< Nordic nRF5x series
+#define OPT_MCU_XIL_ZYNQPS   200 ///< Xilinx Zynq PS series
 /** @} */
 
 /** \defgroup group_supported_os Supported RTOS
