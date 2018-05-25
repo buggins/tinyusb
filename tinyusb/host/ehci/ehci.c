@@ -38,11 +38,11 @@
 
 #include "common/tusb_common.h"
 
-#if MODE_HOST_SUPPORTED && (CFG_TUSB_MCU == OPT_MCU_LPC43XX || CFG_TUSB_MCU == OPT_MCU_LPC18XX)
+#if MODE_HOST_SUPPORTED && (CFG_TUSB_MCU == OPT_MCU_LPC43XX || CFG_TUSB_MCU == OPT_MCU_LPC18XX || CFG_TUSB_MCU == OPT_MCU_XIL_ZYNQPS)
 //--------------------------------------------------------------------+
 // INCLUDE
 //--------------------------------------------------------------------+
-#include "hal/hal.h"
+#include "tusb_hal.h"
 #include "osal/osal.h"
 #include "common/timeout_timer.h"
 
@@ -50,6 +50,9 @@
 #include "../usbh_hcd.h"
 #include "ehci.h"
 
+#if CFG_TUSB_MCU == OPT_MCU_XIL_ZYNQPS
+#include "xparameters.h"
+#endif
 //--------------------------------------------------------------------+
 // MACRO CONSTANT TYPEDEF
 //--------------------------------------------------------------------+
@@ -786,7 +789,17 @@ void hal_hcd_isr(uint8_t hostid)
 //--------------------------------------------------------------------+
 static inline ehci_registers_t* get_operational_register(uint8_t hostid)
 {
-  return (ehci_registers_t*) (hostid ? (&LPC_USB1->USBCMD_H) : (&LPC_USB0->USBCMD_H) );
+#if CFG_TUSB_MCU == OPT_MCU_XIL_ZYNQPS
+#if XPAR_XUSBPS_NUM_INSTANCES == 1
+	return (ehci_registers_t*) (hostid ? NULL : XPAR_PS7_USB_0_BASEADDR);
+#elif XPAR_XUSBPS_NUM_INSTANCES == 1
+	return (ehci_registers_t*) (hostid ? XPAR_PS7_USB_1_BASEADDR : XPAR_PS7_USB_0_BASEADDR);
+#else
+	return NULL;
+#endif
+#else
+	return (ehci_registers_t*) (hostid ? (&LPC_USB1->USBCMD_H) : (&LPC_USB0->USBCMD_H) );
+#endif
 }
 
 #if EHCI_PERIODIC_LIST // TODO refractor/group this together

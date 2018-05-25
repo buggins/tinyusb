@@ -36,12 +36,26 @@
 
 #include "tusb_option.h"
 
-#if MODE_DEVICE_SUPPORTED && CFG_TUSB_MCU == OPT_MCU_XIL_ZYNQPS
+#if CFG_TUSB_MCU == OPT_MCU_XIL_ZYNQPS
 
 #include <stdbool.h>
 
 #include "tusb_hal.h"
 
+#include "xparameters.h"
+#include "xtime_l.h"
+
+#define COUNTS_PER_SECOND (XPAR_PS7_CORTEXA9_0_CPU_CLK_FREQ_HZ / 2)
+
+#if CFG_TUSB_OS == OPT_OS_NONE
+// Only required to implement if using No RTOS (osal_none)
+uint32_t tusb_hal_millis(void)
+{
+    XTime t;
+    XTime_GetTime(&t);
+    return t / (COUNTS_PER_SECOND / 1000000);
+}
+#endif
 /*------------------------------------------------------------------*/
 /* MACRO TYPEDEF CONSTANT ENUM
  *------------------------------------------------------------------*/
