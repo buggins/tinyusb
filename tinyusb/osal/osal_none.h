@@ -240,6 +240,13 @@ static inline bool osal_mutex_release(osal_mutex_t mutex_hdl)
   return osal_semaphore_post(mutex_hdl);
 }
 
+static inline void osal_mutex_reset(osal_mutex_t mutex_hdl) ATTR_ALWAYS_INLINE;
+static inline void osal_mutex_reset(osal_mutex_t mutex_hdl)
+{
+	osal_semaphore_reset(mutex_hdl);
+}
+
+
 #define osal_mutex_wait osal_semaphore_wait
 
 
