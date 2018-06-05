@@ -56,8 +56,6 @@ extern "C" {
 
 #if 0
 // Helper to determine if we are in ISR to use ISR API (only cover ARM Cortex)
-// Note: Actually we don't need this since any event signal (queue send, semaphore post)
-// is done in ISR, other event receive (queue receive, semaphore wait ) in in thread
 static inline bool in_isr(void)
 {
   return (SCB->ICSR & SCB_ICSR_VECTACTIVE_Msk);
@@ -67,14 +65,27 @@ static inline bool in_isr(void)
 //--------------------------------------------------------------------+
 // TASK API
 //--------------------------------------------------------------------+
-typedef void (*osal_func_t)(void *param);
-typedef void* osal_task_t;
+#define OSAL_TASK_DEF(_name, _str, _func, _prio, _stack_sz) \
+  uint8_t _name##_##buf[_stack_sz*sizeof(StackType_t)]; \
+  osal_task_def_t _name = { .func = _func, .prio = _prio, .stack_sz = _stack_sz, .buf = _name##_##buf, .strname = _str };
 
-static inline osal_task_t osal_task_create(osal_func_t code, const char* name, uint32_t stack_size, void* param, uint32_t prio)
+typedef struct
 {
-  osal_task_t task_hdl;
-  xTaskCreate(code, (const char*) name, stack_size, param, prio, &task_hdl);
-  return task_hdl;
+  void (*func)(void *param);
+
+  uint16_t prio;
+  uint16_t stack_sz;
+  void*    buf;
+  const char* strname;
+
+  StaticTask_t stask;
+}osal_task_def_t;
+
+typedef TaskHandle_t osal_task_t;
+
+static inline osal_task_t osal_task_create(osal_task_def_t* taskdef)
+{
+  return xTaskCreateStatic(taskdef->func, taskdef->strname, taskdef->stack_sz, NULL, taskdef->prio, taskdef->buf, &taskdef->stask);
 }
 
 static inline void osal_task_delay(uint32_t msec)
@@ -85,11 +96,24 @@ static inline void osal_task_delay(uint32_t msec)
 //--------------------------------------------------------------------+
 // QUEUE API
 //--------------------------------------------------------------------+
+#define OSAL_QUEUE_DEF(_name, _depth, _type) \
+  uint8_t _name##_##buf[_depth*sizeof(_type)];\
+  osal_queue_def_t _name = { .depth = _depth, .item_sz = sizeof(_type), .buf = _name##_##buf };
+
+typedef struct
+{
+  uint16_t depth;
+  uint16_t item_sz;
+  void*    buf;
+
+  StaticQueue_t sq;
+}osal_queue_def_t;
+
 typedef QueueHandle_t osal_queue_t;
 
-static inline osal_queue_t osal_queue_create(uint32_t depth, uint32_t item_size)
+static inline osal_queue_t osal_queue_create(osal_queue_def_t* qdef)
 {
-  return xQueueCreate(depth, item_size);
+  return xQueueCreateStatic(qdef->depth, qdef->item_sz, qdef->buf, &qdef->sq);
 }
 
 static inline void osal_queue_receive (osal_queue_t const queue_hdl, void *p_data, uint32_t msec, tusb_error_t *p_error)
@@ -98,11 +122,14 @@ static inline void osal_queue_receive (osal_queue_t const queue_hdl, void *p_dat
   (*p_error) = ( xQueueReceive(queue_hdl, p_data, ticks) ? TUSB_ERROR_NONE : TUSB_ERROR_OSAL_TIMEOUT);
 }
 
+static inline bool osal_queue_send_isr(osal_queue_t const queue_hdl, void const * data)
+{
+  return xQueueSendToBackFromISR(queue_hdl, data, NULL);
+}
+
 static inline bool osal_queue_send(osal_queue_t const queue_hdl, void const * data)
 {
-  // queue send used by msc device for retrying read10/write10
-  verify_breakpoint();
-  return xQueueSendToFrontFromISR(queue_hdl, data, NULL);
+  return xQueueSendToBack(queue_hdl, data, OSAL_TIMEOUT_WAIT_FOREVER) == pdTRUE;
 }
 
 static inline void osal_queue_flush(osal_queue_t const queue_hdl)
@@ -114,17 +141,22 @@ static inline void osal_queue_flush(osal_queue_t const queue_hdl)
 //--------------------------------------------------------------------+
 // Semaphore API
 //--------------------------------------------------------------------+
+typedef StaticSemaphore_t osal_semaphore_def_t;
 typedef SemaphoreHandle_t osal_semaphore_t;
 
-static inline osal_semaphore_t osal_semaphore_create(uint32_t max, uint32_t init)
+static inline osal_semaphore_t osal_semaphore_create(osal_semaphore_def_t* semdef)
 {
-  return xSemaphoreCreateCounting(max, init);
+  return xSemaphoreCreateBinaryStatic(semdef);
 }
 
-// TODO add timeout (with instant return from ISR option) for semaphore post & queue send
+static inline bool osal_semaphore_post_isr(osal_semaphore_t sem_hdl)
+{
+  return xSemaphoreGiveFromISR(sem_hdl, NULL) == pdTRUE;
+}
+
 static inline bool osal_semaphore_post(osal_semaphore_t sem_hdl)
 {
-  return xSemaphoreGiveFromISR(sem_hdl, NULL);
+  return xSemaphoreGive(sem_hdl) == pdTRUE;
 }
 
 static inline void osal_semaphore_wait(osal_semaphore_t sem_hdl, uint32_t msec, tusb_error_t *p_error)
@@ -133,8 +165,7 @@ static inline void osal_semaphore_wait(osal_semaphore_t sem_hdl, uint32_t msec, 
   (*p_error) = (xSemaphoreTake(sem_hdl, ticks) ? TUSB_ERROR_NONE : TUSB_ERROR_OSAL_TIMEOUT);
 }
 
-// TODO remove
-static inline void osal_semaphore_reset(osal_semaphore_t const sem_hdl)
+static inline void osal_semaphore_reset_isr(osal_semaphore_t const sem_hdl)
 {
   xSemaphoreTakeFromISR(sem_hdl, NULL);
 }

@@ -65,13 +65,15 @@
 //
 // NOTE: no switch statement is allowed in Task and subtask
 //--------------------------------------------------------------------+
-typedef void (*osal_func_t)(void *param);
+#define OSAL_TASK_DEF(_name, _str, _func, _prio, _stack_sz)  osal_task_def_t _name;
+
+typedef uint8_t osal_task_def_t;
 typedef void* osal_task_t;
 
-static inline osal_task_t osal_task_create(osal_func_t code, const char* name, uint32_t stack_size, void* param, uint32_t prio)
+static inline osal_task_t osal_task_create(osal_task_def_t* taskdef)
 {
-  (void) code; (void) name; (void) stack_size; (void) param; (void) prio;
-  return (osal_task_t) 1;
+  (void) taskdef;
+  return (osal_task_t) 1; // return non zero
 }
 
 #define TASK_RESTART                             \
@@ -128,25 +130,18 @@ static inline osal_task_t osal_task_create(osal_func_t code, const char* name, u
 //--------------------------------------------------------------------+
 // QUEUE API
 //--------------------------------------------------------------------+
+#define OSAL_QUEUE_DEF(_name, _depth, _type)    FIFO_DEF(_name, _depth, _type, false)
+
+typedef fifo_t  osal_queue_def_t;
 typedef fifo_t* osal_queue_t;
 
-static inline osal_queue_t osal_queue_create(uint32_t depth, uint32_t item_size)
+static inline osal_queue_t osal_queue_create(osal_queue_def_t* qdef)
 {
-  fifo_t* ff   = (fifo_t* ) tu_malloc( sizeof(fifo_t) );
-  uint8_t* buf = (uint8_t*) tu_malloc( depth*item_size );
-
-  VERIFY( ff && buf, NULL);
-
-  *ff = (fifo_t) {
-    .buffer = buf, .depth = depth, .item_size = item_size,
-    .count = 0, .wr_idx =0, .rd_idx = 0, .overwritable = false
-  };
-
-  return (osal_queue_t) ff;
+  fifo_clear(qdef);
+  return (osal_queue_t) qdef;
 }
 
-
-static inline bool osal_queue_send(osal_queue_t const queue_hdl, void const * data)
+static inline bool osal_queue_send_isr(osal_queue_t const queue_hdl, void const * data)
 {
   return fifo_write( (fifo_t*) queue_hdl, data);
 }
@@ -181,21 +176,19 @@ typedef struct
 {
   volatile uint16_t count;
            uint16_t max_count;
-}osal_semaphore_data_t;
+}osal_semaphore_def_t;
 
-typedef osal_semaphore_data_t* osal_semaphore_t;
+typedef osal_semaphore_def_t* osal_semaphore_t;
 
 
-static inline osal_semaphore_t osal_semaphore_create(uint32_t max_count, uint32_t init)
+static inline osal_semaphore_t osal_semaphore_create(osal_semaphore_def_t* semdef)
 {
-  osal_semaphore_data_t* sem_data = (osal_semaphore_data_t*) tu_malloc( sizeof(osal_semaphore_data_t));
-  VERIFY(sem_data, NULL);
-
-  sem_data->count     = init;
-  sem_data->max_count = max_count;
-
-  return sem_data;
+  semdef->count     = 0;
+  semdef->max_count = 1;
+  return semdef;
 }
+
+#define osal_semaphore_post_isr osal_semaphore_post
 
 static inline  bool osal_semaphore_post(osal_semaphore_t sem_hdl)
 {
@@ -203,7 +196,7 @@ static inline  bool osal_semaphore_post(osal_semaphore_t sem_hdl)
   return true;
 }
 
-static inline void osal_semaphore_reset(osal_semaphore_t sem_hdl)
+static inline void osal_semaphore_reset_isr(osal_semaphore_t sem_hdl)
 {
   sem_hdl->count = 0;
 }
@@ -228,6 +221,7 @@ static inline void osal_semaphore_reset(osal_semaphore_t sem_hdl)
 //--------------------------------------------------------------------+
 // MUTEX API (priority inheritance)
 //--------------------------------------------------------------------+
+#if 0
 typedef osal_semaphore_t osal_mutex_t;
 
 static inline osal_mutex_t osal_mutex_create(void)
@@ -248,7 +242,7 @@ static inline void osal_mutex_reset(osal_mutex_t mutex_hdl)
 
 
 #define osal_mutex_wait osal_semaphore_wait
-
+#endif
 
 
 #ifdef __cplusplus
