@@ -82,7 +82,33 @@ CFG_TUSB_ATTR_USBRAM CFG_TUSB_MEM_ALIGN static uint8_t _mscd_buf[CFG_TUD_MSC_BUF
 //--------------------------------------------------------------------+
 // INTERNAL OBJECT & FUNCTION DECLARATION
 //--------------------------------------------------------------------+
-static void proc_read10_write10(uint8_t rhport, mscd_interface_t* p_msc);
+static void proc_read10_cmd(uint8_t rhport, mscd_interface_t* p_msc);
+static void proc_write10_cmd(uint8_t rhport, mscd_interface_t* p_msc);
+
+static inline uint32_t rdwr10_get_lba(uint8_t const command[])
+{
+  // read10 & write10 has the same format
+  scsi_write10_t* p_rdwr10 = (scsi_write10_t*) command;
+
+  // copy first to prevent mis-aligned access
+  uint32_t lba;
+  memcpy(&lba, &p_rdwr10->lba, 4);
+
+  return  __be2n(lba);
+}
+
+static inline uint16_t rdwr10_get_blockcount(uint8_t const command[])
+{
+  // read10 & write10 has the same format
+  scsi_write10_t* p_rdwr10 = (scsi_write10_t*) command;
+
+  // copy first to prevent mis-aligned access
+  uint16_t block_count;
+  memcpy(&block_count, &p_rdwr10->block_count, 2);
+
+  return __be2n(block_count);
+}
+
 
 //--------------------------------------------------------------------+
 // USBD-CLASS API
@@ -185,9 +211,13 @@ tusb_error_t mscd_xfer_cb(uint8_t rhport, uint8_t ep_addr, tusb_event_t event, u
       p_msc->data_len    = p_cbw->xfer_bytes;
       p_msc->xferred_len = 0;
 
-      if ( (SCSI_CMD_READ_10 == p_cbw->command[0]) || (SCSI_CMD_WRITE_10 == p_cbw->command[0]) )
+      if (SCSI_CMD_READ_10 == p_cbw->command[0])
       {
-        proc_read10_write10(rhport, p_msc);
+        proc_read10_cmd(rhport, p_msc);
+      }
+      else if (SCSI_CMD_WRITE_10 == p_cbw->command[0])
+      {
+        proc_write10_cmd(rhport, p_msc);
       }
       else
       {
@@ -235,24 +265,51 @@ tusb_error_t mscd_xfer_cb(uint8_t rhport, uint8_t ep_addr, tusb_event_t event, u
       // OUT transfer, invoke callback if needed
       if ( !BIT_TEST_(p_cbw->dir, 7) )
       {
-        if ( SCSI_CMD_WRITE_10 == p_cbw->command[0] )
-        {
-          // LBA and Block count are in Big Endian. Use memcpy first to prevent mis-aligned access
-          scsi_read10_t* p_write10 = (scsi_read10_t*) &p_cbw->command;
-
-          uint32_t lba;
-          memcpy(&lba, &p_write10->lba, 4);
-          lba = __be2n(lba);
-
-          tud_msc_write10_cb(rhport, p_cbw->lun, lba, p_msc->xferred_len, _mscd_buf, xferred_bytes);
-        }
-        else
+        if ( SCSI_CMD_WRITE_10 != p_cbw->command[0] )
         {
           p_csw->status = (tud_msc_scsi_cb(rhport, p_cbw->lun, p_cbw->command, _mscd_buf, p_msc->data_len) >= 0 ) ? MSC_CSW_STATUS_PASSED : MSC_CSW_STATUS_FAILED;
         }
+        else
+        {
+          uint32_t lba = rdwr10_get_lba(p_cbw->command);
+
+          // Application can consume smaller bytes
+          int32_t nbytes = tud_msc_write10_cb(rhport, p_cbw->lun, lba, p_msc->xferred_len, _mscd_buf, xferred_bytes);
+
+          if ( nbytes < 0 )
+          {
+            // negative means error -> skip to status phase, status in CSW set to failed
+            p_csw->data_residue = p_cbw->xfer_bytes - p_msc->xferred_len;
+            p_csw->status       = MSC_CSW_STATUS_FAILED;
+
+            p_msc->stage = MSC_STAGE_STATUS;
+            break;
+          }else
+          {
+            // Application consume less than what we got (including zero)
+            if ( nbytes < xferred_bytes )
+            {
+              if ( nbytes > 0 )
+              {
+                p_msc->xferred_len += nbytes;
+                memmove(_mscd_buf, _mscd_buf+nbytes, xferred_bytes-nbytes);
+              }
+
+              // simulate an transfer complete with adjusted params
+              dcd_xfer_complete(rhport, p_msc->ep_out, xferred_bytes-nbytes, true);
+
+              return TUSB_ERROR_NONE; // skip the rest
+            }
+            else
+            {
+              // Application consume all bytes in our buffer
+              // Nothing to do, process with normal flow
+            }
+          }
+        }
       }
 
-      /*------------- Prepare for DATA transfer if not complete yet -------------*/
+      // Accumulate data so far
       p_msc->xferred_len += xferred_bytes;
 
       if ( p_msc->xferred_len >= p_msc->data_len )
@@ -262,10 +319,15 @@ tusb_error_t mscd_xfer_cb(uint8_t rhport, uint8_t ep_addr, tusb_event_t event, u
       }
       else
       {
-        if ( (SCSI_CMD_READ_10 == p_cbw->command[0]) || (SCSI_CMD_WRITE_10 == p_cbw->command[0]) )
+        // READ10 & WRITE10 Can be executed with large bulk of data e.g write 8K bytes (several flash write)
+        // We break it into multiple smaller command whose data size is up to CFG_TUD_MSC_BUFSIZE
+        if (SCSI_CMD_READ_10 == p_cbw->command[0])
         {
-          // Can be executed several times e.g write 8K bytes (several flash write)
-          proc_read10_write10(rhport, p_msc);
+          proc_read10_cmd(rhport, p_msc);
+        }
+        else if (SCSI_CMD_WRITE_10 == p_cbw->command[0])
+        {
+          proc_write10_cmd(rhport, p_msc);
         }else
         {
           // No other command take more than one transfer yet -> unlikely error
@@ -304,51 +366,52 @@ tusb_error_t mscd_xfer_cb(uint8_t rhport, uint8_t ep_addr, tusb_event_t event, u
   return TUSB_ERROR_NONE;
 }
 
-static void proc_read10_write10(uint8_t rhport, mscd_interface_t* p_msc)
+static void proc_read10_cmd(uint8_t rhport, mscd_interface_t* p_msc)
 {
   msc_cbw_t const * p_cbw = &p_msc->cbw;
   msc_csw_t       * p_csw = &p_msc->csw;
 
-  // read10 & write10 has the same format
-  scsi_read10_t* p_readwrite = (scsi_read10_t*) &p_cbw->command;
+  uint32_t lba = rdwr10_get_lba(p_cbw->command);
+  uint16_t block_count = rdwr10_get_blockcount(p_cbw->command);
 
-  uint8_t const ep_data = BIT_TEST_(p_cbw->dir, 7) ? p_msc->ep_in : p_msc->ep_out;
+  // remaining bytes capped at class buffer
+  int32_t nbytes = (int32_t) min32_of(sizeof(_mscd_buf), p_cbw->xfer_bytes-p_msc->xferred_len);
 
-  // LBA and Block count are in Big Endian. Use memcpy first to prevent mis-aligned access
-  uint32_t lba;
-  uint16_t block_count;
+  // Application can consume smaller bytes
+  nbytes = tud_msc_read10_cb (rhport, p_cbw->lun, lba, p_msc->xferred_len, _mscd_buf, (uint32_t) nbytes);
 
-  memcpy(&lba, &p_readwrite->lba, 4);
-  lba = __be2n(lba);
-
-  memcpy(&block_count, &p_readwrite->block_count, 2);
-  block_count = __be2n_16(block_count);
-
-  int32_t xfer_bytes = (int32_t) min32_of(sizeof(_mscd_buf), p_cbw->xfer_bytes-p_msc->xferred_len);
-
-  // Write10 callback will be called later when usb transfer complete
-  if (SCSI_CMD_READ_10 == p_cbw->command[0])
+  if ( nbytes < 0 )
   {
-    xfer_bytes = tud_msc_read10_cb (rhport, p_cbw->lun, lba, p_msc->xferred_len, _mscd_buf, (uint32_t) xfer_bytes);
-  }
-
-  if ( xfer_bytes < 0 )
-  {
-    // negative is error -> pipe is stalled & status in CSW set to failed
+    // negative means error -> pipe is stalled & status in CSW set to failed
     p_csw->data_residue = p_cbw->xfer_bytes - p_msc->xferred_len;
     p_csw->status       = MSC_CSW_STATUS_FAILED;
 
-    dcd_edpt_stall(rhport, ep_data);
+    dcd_edpt_stall(rhport, p_msc->ep_in);
   }
-  else if ( xfer_bytes == 0 )
+  else if ( nbytes == 0 )
   {
-    // zero is not ready -> try again later by simulate an transfer complete
-    dcd_xfer_complete(rhport, ep_data, 0, true);
+    // zero means not ready -> try again later by simulate an transfer complete
+    dcd_xfer_complete(rhport, p_msc->ep_in, 0, true);
   }
   else
   {
-    TU_ASSERT( dcd_edpt_xfer(rhport, ep_data, _mscd_buf, xfer_bytes), );
+    TU_ASSERT( dcd_edpt_xfer(rhport, p_msc->ep_in, _mscd_buf, nbytes), );
   }
+}
+
+static void proc_write10_cmd(uint8_t rhport, mscd_interface_t* p_msc)
+{
+  msc_cbw_t const * p_cbw = &p_msc->cbw;
+  msc_csw_t       * p_csw = &p_msc->csw;
+
+  uint32_t lba = rdwr10_get_lba(p_cbw->command);
+  uint16_t block_count = rdwr10_get_blockcount(p_cbw->command);
+
+  // remaining bytes capped at class buffer
+  int32_t nbytes = (int32_t) min32_of(sizeof(_mscd_buf), p_cbw->xfer_bytes-p_msc->xferred_len);
+
+  // Write10 callback will be called later when usb transfer complete
+  TU_ASSERT( dcd_edpt_xfer(rhport, p_msc->ep_out, _mscd_buf, nbytes), );
 }
 
 #endif
