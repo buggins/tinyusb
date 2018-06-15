@@ -157,7 +157,7 @@ tusb_error_t usbh_init(void)
   {
     usbh_device_info_t * const p_device = &usbh_devices[i];
 
-    p_device->control.sem_hdl = osal_semaphore_create(1, 0);
+    p_device->control.sem_hdl = osal_semaphore_create();
     TU_ASSERT(p_device->control.sem_hdl, TUSB_ERROR_OSAL_SEMAPHORE_FAILED);
 
     p_device->control.mutex_hdl = osal_mutex_create();

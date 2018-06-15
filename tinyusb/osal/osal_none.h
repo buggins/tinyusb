@@ -181,12 +181,7 @@ typedef struct
 typedef osal_semaphore_def_t* osal_semaphore_t;
 
 
-static inline osal_semaphore_t osal_semaphore_create(osal_semaphore_def_t* semdef)
-{
-  semdef->count     = 0;
-  semdef->max_count = 1;
-  return semdef;
-}
+osal_semaphore_t osal_semaphore_create();
 
 #define osal_semaphore_post_isr osal_semaphore_post
 
@@ -221,28 +216,23 @@ static inline void osal_semaphore_reset_isr(osal_semaphore_t sem_hdl)
 //--------------------------------------------------------------------+
 // MUTEX API (priority inheritance)
 //--------------------------------------------------------------------+
-#if 0
-typedef osal_semaphore_t osal_mutex_t;
 
-static inline osal_mutex_t osal_mutex_create(void)
+typedef struct
 {
-  return osal_semaphore_create(1, 0);
-}
-
-static inline bool osal_mutex_release(osal_mutex_t mutex_hdl)
-{
-  return osal_semaphore_post(mutex_hdl);
-}
-
-static inline void osal_mutex_reset(osal_mutex_t mutex_hdl) ATTR_ALWAYS_INLINE;
-static inline void osal_mutex_reset(osal_mutex_t mutex_hdl)
-{
-	osal_semaphore_reset(mutex_hdl);
-}
+	uint8_t count;
+} osal_mutex_value_t;
 
 
-#define osal_mutex_wait osal_semaphore_wait
-#endif
+typedef osal_mutex_value_t * osal_mutex_t;
+
+osal_mutex_t osal_mutex_create(void);
+
+bool osal_mutex_release(osal_mutex_t mutex_hdl);
+
+void osal_mutex_reset(osal_mutex_t mutex_hdl);
+
+
+void osal_mutex_wait(osal_mutex_t mutex_hdl, uint32_t msec, tusb_error_t *p_error);
 
 
 #ifdef __cplusplus
